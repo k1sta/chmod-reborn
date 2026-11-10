@@ -46,6 +46,18 @@ mode_t parse_octal(const char *mode_str) {
     return (mode_t)val;
 }
 
+int is_ugoa(char c) {
+    return c == 'u' || c == 'g' || c == 'o' ||  c == 'a';
+}
+
+int is_permission(char c) {
+    return c == 'r' || c == 'w' || c == 'x' || c == 'X' || c == 's' || c == 't';
+}
+
+int is_operator(char c) {
+    return c == '+' || c == '-' || c == '=';
+}
+
 /*
 checa se uma string representa um modo simbólico válido
 */
@@ -55,23 +67,58 @@ int is_symbolic_mode(const char *mode_str) {
     if (mode_str[0] == '\0')
         return 0;
 
+    //loop para tratar as vírgulas (chmod [OPTION]... MODE[,MODE]... FILE...)
     while (mode_str[i] != '\0') {
-        //para os modos ugoa, que são opcionais 
-        while (mode_str[i] == 'u' || mode_str[i] == 'g' || mode_str[i] == 'o' || mode_str[i] == 'a') {
+        //lê os modos ugoa, que são opcionais 
+        while (is_ugoa(mode_str[i])) {
             i++;
         }
 
-        //verifica se tem um +, - ou = depois
-        if (!(i == '+' || i == '-' ||i == '=')) {
+        //verifica se tem um +, - ou = depois de ugoa ou no começo
+        if (!is_operator(mode_str[i])) {
+            return 0;}
+
+        //permite várias operações
+        while (is_operator(mode_str[i])) {
+            i++;
+
+            //Caso g=u, o+g ou u-o.
+            if (mode_str[i] == 'u' ||mode_str[i] == 'g' || mode_str[i] == 'o') {
+                i++;
+
+                //Depois pode ter outro operador ou uma vírgula ou acabar a string
+                if (mode_str[i] != '\0' && mode_str[i] != ',' && !is_operator(mode_str[i])) {
+                    return 0;
+                }
+            } else {
+                //r, w, x, X, s e t
+                while (is_permission(mode_str[i])) {
+                    i++;
+                }
+            }
+        }
+
+        //verifica se acabou a string ou se tem uma vírgula para o próximo modo
+        if (mode_str[i] == '\0') {
+            return 1;
+        }
+
+        //verifica se tem uma vírgula para o próximo modo
+        if (mode_str[i] == ',') {
+            i++;
+
+            //verifica se tem algo depois da vírgula
+            if (mode_str[i] == '\0') {
+                return 0;
+            }
+        } else {
+            //se não tem vírgula, então tinha que ser o fim da string
             return 0;
         }
-    //incompleta, vou terminar ainda
+    }
 
-
-
-    //    
     return 1;
-}
+    }
 
 
 /*
