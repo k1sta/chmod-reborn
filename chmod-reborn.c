@@ -1,8 +1,8 @@
 /*
 chmod-reborn.c
-implementacao propria do chmod em C usando chamada de sistema POSIX chmod()
+Implementação própria do chmod em C usando chamada de sistema POSIX chmod()
 
-kitagawa
+deixar sem nome para nao vazar na internet
 */
 
 #include <stdio.h>
