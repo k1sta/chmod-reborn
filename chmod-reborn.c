@@ -96,12 +96,13 @@ int main(int argc, char *argv[]) {
     */
 
     const char *mode_str = argv[1];
+    int exit = EXIT_SUCCESS;
 
     /*
     ainda nao ta implementado 2+ arquivos, implementar um loop para percorrer do argv2 ate argv argc-1
     */
     if (apply_chmod(mode_str, argv[2]) != 0) {
-        exit_status = EXIT_FAILURE;
+        exit = EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;
