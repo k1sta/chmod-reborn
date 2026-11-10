@@ -19,7 +19,7 @@ checa se uma string representa um octal valido (define qual o modo de declaracao
 int is_octal_mode(const char *mode_str) {
     if (*mode_str == '\0') return 0;
     for (int i = 0; mode_str[i] != '\0'; i++) {
-        if (mode_str[i] < '0' || mode_str[i] > '7') {
+        if (i >= 4 || mode_str[i] < '0' || mode_str[i] > '7') {
             return 0;
         }
     }
@@ -39,10 +39,40 @@ mode_t parse_octal(const char *mode_str) {
     // tem caracter nao parseavel ou o valor eh negativo ou maior que 07777 (12 bits de perm)
     if (*endptr != '\0' || val < 0 || val > 07777) {
         fprintf(stderr, "Erro: modo octal invalido '%s'\n", mode_str);
+        //pra ficar igual a mensagem de erro real, se quiser
+        fprintf(stderr, "chmod: invalid mode: ‘%s’\nTry 'chmod --help' for more information.\n", mode_str);
         exit(EXIT_FAILURE);
     }
     return (mode_t)val;
 }
+
+/*
+checa se uma string representa um modo simbólico válido
+*/
+int is_symbolic_mode(const char *mode_str) {
+    int i = 0;
+
+    if (mode_str[0] == '\0')
+        return 0;
+
+    while (mode_str[i] != '\0') {
+        //para os modos ugoa, que são opcionais 
+        while (mode_str[i] == 'u' || mode_str[i] == 'g' || mode_str[i] == 'o' || mode_str[i] == 'a') {
+            i++;
+        }
+
+        //verifica se tem um +, - ou = depois
+        if (!(i == '+' || i == '-' ||i == '=')) {
+            return 0;
+        }
+    //incompleta, vou terminar ainda
+
+
+
+    //    
+    return 1;
+}
+
 
 /*
 parser simbolcio
@@ -79,6 +109,40 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 }
 
 int main(int argc, char *argv[]) {
+    const char *mode_str;
+    int i;
+    int exit = EXIT_SUCCESS;
+    
+    //verifica argumentos de entrada - é obrigatório informar o modo e pelo menos um arquivo
+    //trata os erros de forma similar ao chmod
+
+    //chmod sem argumentos
+    if (argc == 1) {
+        fprintf(stderr,"chmod: missing operand\n" "Try 'chmod --help' for more information.\n");
+        return EXIT_FAILURE;
+    }
+
+    //chmod com apenas um argumento (chmod x, chmod +x, chmod a.txt)
+    if (argc == 2) {
+        fprintf(stderr,"chmod: missing operand after '%s'\n""Try 'chmod --help' for more information.\n", argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    mode_str = argv[1];
+    //chmod modo inválido
+    if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str) {
+        fprintf(stderr,"chmod: invalid mode: '%s'\n""Try 'chmod --help' for more information.\n", argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    /* diretório ou arquivo informados não foram encontrados
+    if()
+        fprintf(stderr, "chmod: cannot access '%s': No such file or directory\n", argv[2]);
+        return EXIT_FAILURE;
+    } */
+
+    
+    
     // confere se tem o minimo de argumentos
     if (argc < 3) {
         fprintf(stderr, "Uso: %s <modo> <arq1> [arq2 ...]\n", argv[0]); //[arq2 ...] nao implementado ainda
