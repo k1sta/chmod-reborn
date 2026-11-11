@@ -178,11 +178,14 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 Flags
 */
 
+int is_ambiguous_version_option(const char *argument) {
+    return strcmp(argument, "--v") == 0 || strcmp(argument, "--ve") == 0 || strcmp(argument, "--ver") == 0;
+}
+
 /* Flag help */
 int is_help_option(const char *argument) {
     return strcmp(argument, "--h") == 0 || strcmp(argument, "--he") == 0 || strcmp(argument, "--hel") == 0 || strcmp(argument, "--help") == 0;
 }
-
 
 void flag_help(void) {
     fprintf(stdout,
@@ -209,8 +212,27 @@ void flag_help(void) {
         "GNU coreutils online help: <https://www.gnu.org/software/coreutils/>\n"
         "Report any translation bugs to <https://translationproject.org/team/>\n"
         "Full documentation <https://www.gnu.org/software/coreutils/chmod>\n"
-        "or available locally via: info '(coreutils) chmod invocation'\n"
-    );
+        "or available locally via: info '(coreutils) chmod invocation'\n");
+}
+
+/* Flag version */
+int is_version_option(const char *argument) {
+    return strcmp(argument, "--vers") == 0 || strcmp(argument, "--versi") == 0 || strcmp(argument, "--versio") == 0 || strcmp(argument, "--version") == 0;
+}
+
+void flag_version(void) {
+    fprintf(stdout,
+        "Reference version of reinplemented chmod:\n'"
+        "chmod (GNU coreutils) 9.4\n"
+        "Copyright (C) 2023 Free Software Foundation, Inc.\n"
+        "\n"
+        "License GPLv3+: GNU GPL version 3 or later "
+        "<https://gnu.org/licenses/gpl.html>.\n"
+        "This is free software: you are free to change and redistribute it.\n"
+        "There is NO WARRANTY, to the extent permitted by law.\n"
+        "\n"
+        "Written by David MacKenzie and Jim Meyering.\n"
+        "Reimplemented by G. & P.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -222,7 +244,17 @@ int main(int argc, char *argv[]) {
     //trata os erros de forma similar ao chmod
 
     if (argc >= 2 && is_help_option(argv[1])) {
-        print_help();
+        flag_help();
+        return EXIT_SUCCESS;
+    }
+
+    if (argc >= 2 && is_ambiguous_verbose_version_option(argv[1])) {
+        fprintf(stderr,"chmod: option '%s' is ambiguous; possibilities: \n'--verbose' '--version'\nTry 'chmod --help' for more information.\n", argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    if (argc >= 2 && is_version_option(argv[1])) {
+        flag_version();
         return EXIT_SUCCESS;
     }
 
@@ -242,7 +274,6 @@ int main(int argc, char *argv[]) {
     //chmod modo inválido
     if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
         invalid_mode(mode_str);
-        return EXIT_FAILURE;
     }
 
     /* diretório ou arquivo informados não foram encontrados
