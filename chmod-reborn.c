@@ -15,6 +15,7 @@ deixar sem nome para nao vazar na internet
 
 //flag global para erros silenciosos 
 int silent_errors = 0;
+int verbose = 0;
 
 void invalid_mode(const char *mode_str) {
     fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
@@ -149,6 +150,24 @@ nao implementado
 */
 mode_t parse_symbolic(const char *mode_str, mode_t current_mode);
 
+
+/*preenche o texto com as permissões para o verbose */
+void mode_verbose(mode_t mode, char text[10]) {
+    //dono
+    text[0] = (mode & S_IRUSR) ? 'r' : '-';
+    text[1] = (mode & S_IWUSR) ? 'w' : '-';
+    text[2] = (mode & S_IXUSR) ? 'x' : '-';
+    //grupo
+    text[3] = (mode & S_IRGRP) ? 'r' : '-';
+    text[4] = (mode & S_IWGRP) ? 'w' : '-';
+    text[5] = (mode & S_IXGRP) ? 'x' : '-';
+    //outros
+    text[6] = (mode & S_IROTH) ? 'r' : '-';
+    text[7] = (mode & S_IWOTH) ? 'w' : '-';
+    text[8] = (mode & S_IXOTH) ? 'x' : '-';
+
+    text[9] = '\0'; }
+
 /*
 checa se o modo ta declarado como octal
 chama o parser corresp
@@ -156,15 +175,22 @@ aplica o chmod no arquivo usando syscall POSIX
 */
 int apply_chmod(const char *mode_str, const char *filepath) {
     mode_t final_mode;
+    mode_t old_mode;
+    char old_text[10];
+    char new_text[10];
     struct stat file_status;
 
     if (stat(filepath, &file_status) == -1) {
-    if (!silent_errors) {
-        fprintf(stderr, "chmod: cannot access '%s': %s\n", filepath, strerror(errno));
-    }
-
+        if (!silent_errors) {
+            fprintf(stderr, "chmod: cannot access '%s': %s\n", filepath, strerror(errno));
+        }
+        if (verbose) {
+            printf("'%s' could not be accessed\n", filepath); }
     return -1; 
     }
+
+
+    old_mode = file_status.st_mode & 07777;
 
     if (is_octal_mode(mode_str)) {
         // modo octal eh facil pq sobrescreve o modo entao eh so parsear
@@ -184,6 +210,16 @@ int apply_chmod(const char *mode_str, const char *filepath) {
         }
         return -1;
     }
+
+    if (verbose) {
+        mode_verbose(old_mode, old_text);
+        mode_verbose(final_mode, new_text);
+
+        if (old_mode == final_mode) {
+            printf("mode of '%s' retained as %04o (%s)\n", filepath, (unsigned int)old_mode, old_text);
+        } else {
+            printf("mode of '%s' changed from %04o (%s) to %04o (%s)\n", filepath, (unsigned int)old_mode, old_text, (unsigned int)final_mode, new_text);}
+        }
     return 0;
 }
 
@@ -254,6 +290,11 @@ int is_silent_option(const char *argument) {
     return strcmp(argument, "-f") == 0 || strcmp(argument, "--silent") == 0 || strcmp(argument, "--quiet") == 0;
 }
 
+/* Flag verbose */
+int is_verbose_option(const char *argument) {
+    return strcmp(argument, "-v") == 0 ||  strcmp(argument, "--verb") == 0 || strcmp(argument, "--verbo") == 0 || strcmp(argument, "--verbose") == 0;
+}
+
 int main(int argc, char *argv[]) {
     const char *mode_str;
     int exit = EXIT_SUCCESS;
@@ -276,6 +317,12 @@ int main(int argc, char *argv[]) {
         if (argc >= 2 && is_version_option(argv[argument_index])) {
             flag_version();
             return EXIT_SUCCESS;
+        }
+
+        if (is_verbose_option(argv[argument_index])) {
+            verbose = 1;
+            argument_index++;
+            continue;
         }
 
 
