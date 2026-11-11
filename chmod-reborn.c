@@ -13,6 +13,9 @@ deixar sem nome para nao vazar na internet
 #include <sys/stat.h>
 #include <sys/types.h>
 
+//flag global para erros silenciosos 
+int silent_errors = 0;
+
 void invalid_mode(const char *mode_str) {
     fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
     exit(EXIT_FAILURE);
@@ -166,11 +169,13 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 
     // chama syscall POSIX para mudar permissoes (nao sei se isso eh roubar k)
     if (chmod(filepath, final_mode) == -1) {
-        fprintf(stderr, "ERRO: nao foi possivel mudar as perms de '%s': %s\n", 
-                filepath, strerror(errno));
+        if (!silent_errors) {
+            //acho que tem que ajustar depois essa mensagem para os casos possíveis de erro
+            fprintf(stderr, "ERRO: nao foi possivel mudar as perms de '%s': %s\n", 
+                    filepath, strerror(errno));
+        }
         return -1;
     }
-
     return 0;
 }
 
@@ -178,7 +183,7 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 Flags
 */
 
-int is_ambiguous_version_option(const char *argument) {
+int is_ambiguous_verbose_version_option(const char *argument) {
     return strcmp(argument, "--v") == 0 || strcmp(argument, "--ve") == 0 || strcmp(argument, "--ver") == 0;
 }
 
@@ -235,42 +240,59 @@ void flag_version(void) {
         "Reimplemented by G. & P.\n");
 }
 
+/* Flag silent/quiet/f*/
+
+int is_silent_option(const char *argument) {
+    return strcmp(argument, "-f") == 0 || strcmp(argument, "--silent") == 0 || strcmp(argument, "--quiet") == 0;
+}
+
 int main(int argc, char *argv[]) {
     const char *mode_str;
-    int i;
     int exit = EXIT_SUCCESS;
+    int argument_index = 1;
     
     //verifica argumentos de entrada - é obrigatório informar o modo e pelo menos um arquivo
     //trata os erros de forma similar ao chmod
+    //while para ler opções (flags) antes do modo e dos arquivos
+    while (argument_index < argc) {
+        if (argc >= 2 && is_help_option(argv[argument_index])) {
+            flag_help();
+            return EXIT_SUCCESS;
+        }
 
-    if (argc >= 2 && is_help_option(argv[1])) {
-        flag_help();
-        return EXIT_SUCCESS;
+        if (argc >= 2 && is_ambiguous_verbose_version_option(argv[argument_index])) {
+            fprintf(stderr,"chmod: option '%s' is ambiguous; possibilities: \n'--verbose' '--version'\nTry 'chmod --help' for more information.\n", argv[argument_index]);
+            return EXIT_FAILURE;
+        }
+
+        if (argc >= 2 && is_version_option(argv[argument_index])) {
+            flag_version();
+            return EXIT_SUCCESS;
+        }
+
+
+        if (argc >= 2 && is_silent_option(argv[argument_index])) {
+            silent_errors = 1;
+            argument_index++;
+            continue;
+        }
+        //se não for uma flag, então é o modo e sai do loop
+        break;
     }
 
-    if (argc >= 2 && is_ambiguous_verbose_version_option(argv[1])) {
-        fprintf(stderr,"chmod: option '%s' is ambiguous; possibilities: \n'--verbose' '--version'\nTry 'chmod --help' for more information.\n", argv[1]);
+    //verifica se tem o minimo de argumentos
+    if (argument_index >= argc) {
+        fprintf(stderr, "chmod: missing operand\nTry 'chmod --help' for more information.\n");
         return EXIT_FAILURE;
     }
+    
+    mode_str = argv[argument_index];
 
-    if (argc >= 2 && is_version_option(argv[1])) {
-        flag_version();
-        return EXIT_SUCCESS;
-    }
-
-    //chmod sem argumentos
-    if (argc == 1) {
-        fprintf(stderr,"chmod: missing operand\n" "Try 'chmod --help' for more information.\n");
+    //verifica se tem pelo menos um arquivo depois do modo
+    if (argument_index + 1 >= argc) {
+        fprintf(stderr,"chmod: missing operand after '%s'\nTry 'chmod --help' for more information.\n",mode_str);
         return EXIT_FAILURE;
     }
-
-    //chmod com apenas um argumento (chmod x, chmod +x, chmod a.txt)
-    if (argc == 2) {
-        fprintf(stderr,"chmod: missing operand after '%s'\n""Try 'chmod --help' for more information.\n", argv[1]);
-        return EXIT_FAILURE;
-    }
-
-    mode_str = argv[1];
     //chmod modo inválido
     if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
         invalid_mode(mode_str);
@@ -284,11 +306,11 @@ int main(int argc, char *argv[]) {
 
     
     
-    // confere se tem o minimo de argumentos
-    if (argc < 3) {
-        fprintf(stderr, "Uso: %s <modo> <arq1> [arq2 ...]\n", argv[0]); //[arq2 ...] nao implementado ainda
-        return EXIT_FAILURE;
-    }
+    // // confere se tem o minimo de argumentos
+    // if (argc < 3) {
+    //     fprintf(stderr, "Uso: %s <modo> <arq1> [arq2 ...]\n", argv[0]); //[arq2 ...] nao implementado ainda
+    //     return EXIT_FAILURE;
+    // }
 
     /*
     colocar aqui parsing de flag depois
@@ -305,11 +327,11 @@ int main(int argc, char *argv[]) {
     /*
     ainda nao ta implementado 2+ arquivos, implementar um loop para percorrer do argv2 ate argv argc-1 - OK
     */
-   for (int i = 2; i <= argc - 1; i++) {
+   for (int i = argument_index + 1; i <= argc - 1; i++) {
         if (apply_chmod(mode_str, argv[i]) != 0) {
         exit = EXIT_FAILURE;
     }
    }
 
-    return EXIT_SUCCESS;
+    return exit;
 }
