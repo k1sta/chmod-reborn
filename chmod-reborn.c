@@ -13,13 +13,18 @@ deixar sem nome para nao vazar na internet
 #include <sys/stat.h>
 #include <sys/types.h>
 
+void invalid_mode(const char *mode_str) {
+    fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
+    exit(EXIT_FAILURE);
+}
+
 /**
 checa se uma string representa um octal valido (define qual o modo de declaracao dos modos)
 */
 int is_octal_mode(const char *mode_str) {
     if (*mode_str == '\0') return 0;
     for (int i = 0; mode_str[i] != '\0'; i++) {
-        if (i >= 4 || mode_str[i] < '0' || mode_str[i] > '7') {
+        if (mode_str[i] < '0' || mode_str[i] > '7') {
             return 0;
         }
     }
@@ -38,8 +43,7 @@ mode_t parse_octal(const char *mode_str) {
     
     // tem caracter nao parseavel ou o valor eh negativo ou maior que 07777 (12 bits de perm)
     if (*endptr != '\0' || val < 0 || val > 07777) {
-        fprintf(stderr, "chmod: invalid mode: ‘%s’\nTry 'chmod --help' for more information.\n", mode_str);
-        exit(EXIT_FAILURE);
+        invalid_mode(mode_str);
     }
     return (mode_t)val;
 }
@@ -237,7 +241,7 @@ int main(int argc, char *argv[]) {
     mode_str = argv[1];
     //chmod modo inválido
     if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
-        fprintf(stderr,"chmod: invalid mode: '%s'\n""Try 'chmod --help' for more information.\n", argv[1]);
+        invalid_mode(mode_str);
         return EXIT_FAILURE;
     }
 
