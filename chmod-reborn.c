@@ -67,8 +67,10 @@ int is_symbolic_mode(const char *mode_str) {
 
     //loop para tratar as vírgulas (chmod [OPTION]... MODE[,MODE]... FILE...)
     while (mode_str[i] != '\0') {
+        int has_ugoa = 0;
         //lê os modos ugoa, que são opcionais 
         while (is_ugoa(mode_str[i])) {
+            has_ugoa = 1;
             i++;
         }
 
@@ -77,11 +79,26 @@ int is_symbolic_mode(const char *mode_str) {
             return 0;}
 
         //permite várias operações
+        //tem que aceitar vários zeros antes do número
         while (is_operator(mode_str[i])) {
             i++;
 
+            //casos do help =755, =0755 (ou +zeros), +755 ou -755
+            if (mode_str[i] >= '0' && mode_str[i] <= '7') {
+                //evita u=755
+                if (has_ugoa)
+                    return 0;
+
+                while (mode_str[i] >= '0' && mode_str[i] <= '7') {
+                  i++;
+            }
+            //depois do número, vírgula ou fim da string
+            if (mode_str[i] != '\0' && mode_str[i] != ',') {
+                    return 0;}
+            }
+         
             //Caso g=u, o+g ou u-o.
-            if (mode_str[i] == 'u' ||mode_str[i] == 'g' || mode_str[i] == 'o') {
+            else if (mode_str[i] == 'u' ||mode_str[i] == 'g' || mode_str[i] == 'o') {
                 i++;
 
                 //Depois pode ter outro operador ou uma vírgula ou acabar a string
