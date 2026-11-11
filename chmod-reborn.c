@@ -38,8 +38,6 @@ mode_t parse_octal(const char *mode_str) {
     
     // tem caracter nao parseavel ou o valor eh negativo ou maior que 07777 (12 bits de perm)
     if (*endptr != '\0' || val < 0 || val > 07777) {
-        fprintf(stderr, "Erro: modo octal invalido '%s'\n", mode_str);
-        //pra ficar igual a mensagem de erro real, se quiser
         fprintf(stderr, "chmod: invalid mode: ‘%s’\nTry 'chmod --help' for more information.\n", mode_str);
         exit(EXIT_FAILURE);
     }
@@ -155,6 +153,45 @@ int apply_chmod(const char *mode_str, const char *filepath) {
     return 0;
 }
 
+/*
+Flags
+*/
+
+/* Flag help */
+int is_help_option(const char *argument) {
+    return strcmp(argument, "--h") == 0 || strcmp(argument, "--he") == 0 || strcmp(argument, "--hel") == 0 || strcmp(argument, "--help") == 0;
+}
+
+
+void flag_help(void) {
+    fprintf(stdout,
+        "Usage: chmod [OPTION]... MODE[,MODE]... FILE...\n"
+        "  or:  chmod [OPTION]... OCTAL-MODE FILE...\n"
+        "  or:  chmod [OPTION]... --reference=RFILE FILE...\n"
+        "\n"
+        "Change the mode of each FILE to MODE.\n"
+        "With --reference, change the mode of each FILE to that of RFILE.\n"
+        "\n"
+        "  -c, --changes          like verbose but report only when a change is made\n"
+        "  -f, --silent, --quiet  suppress most error messages\n"
+        "  -v, --verbose          output a diagnostic for every file processed\n"
+        "      --no-preserve-root  do not treat '/' specially (the default)\n"
+        "      --preserve-root     fail to operate recursively on '/'\n"
+        "      --reference=RFILE  use RFILE's mode instead of specifying MODE values.\n"
+        "                         RFILE is always dereferenced if a symbolic link.\n"
+        "  -R, --recursive        change files and directories recursively\n"
+        "      --help        display this help and exit\n"
+        "      --version     output version information and exit\n"
+        "\n"
+        "Each MODE is of the form '[ugoa]*([-+=]([rwxXst]*|[ugo]))+|[-+=][0-7]+'.\n"
+        "\n"
+        "GNU coreutils online help: <https://www.gnu.org/software/coreutils/>\n"
+        "Report any translation bugs to <https://translationproject.org/team/>\n"
+        "Full documentation <https://www.gnu.org/software/coreutils/chmod>\n"
+        "or available locally via: info '(coreutils) chmod invocation'\n"
+    );
+}
+
 int main(int argc, char *argv[]) {
     const char *mode_str;
     int i;
@@ -162,6 +199,11 @@ int main(int argc, char *argv[]) {
     
     //verifica argumentos de entrada - é obrigatório informar o modo e pelo menos um arquivo
     //trata os erros de forma similar ao chmod
+
+    if (argc >= 2 && is_help_option(argv[1])) {
+        print_help();
+        return EXIT_SUCCESS;
+    }
 
     //chmod sem argumentos
     if (argc == 1) {
@@ -177,7 +219,7 @@ int main(int argc, char *argv[]) {
 
     mode_str = argv[1];
     //chmod modo inválido
-    if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str) {
+    if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
         fprintf(stderr,"chmod: invalid mode: '%s'\n""Try 'chmod --help' for more information.\n", argv[1]);
         return EXIT_FAILURE;
     }
@@ -206,15 +248,16 @@ int main(int argc, char *argv[]) {
     -h, --help: mostra a ajuda
     */
 
-    const char *mode_str = argv[1];
-    int exit = EXIT_SUCCESS;
+    
 
     /*
-    ainda nao ta implementado 2+ arquivos, implementar um loop para percorrer do argv2 ate argv argc-1
+    ainda nao ta implementado 2+ arquivos, implementar um loop para percorrer do argv2 ate argv argc-1 - OK
     */
-    if (apply_chmod(mode_str, argv[2]) != 0) {
+   for (int i = 2; i <= argc - 1; i++) {
+        if (apply_chmod(mode_str, argv[i]) != 0) {
         exit = EXIT_FAILURE;
     }
+   }
 
     return EXIT_SUCCESS;
 }
