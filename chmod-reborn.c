@@ -156,6 +156,15 @@ aplica o chmod no arquivo usando syscall POSIX
 */
 int apply_chmod(const char *mode_str, const char *filepath) {
     mode_t final_mode;
+    struct stat file_status;
+
+    if (stat(filepath, &file_status) == -1) {
+    if (!silent_errors) {
+        fprintf(stderr, "chmod: cannot access '%s': %s\n", filepath, strerror(errno));
+    }
+
+    return -1; 
+    }
 
     if (is_octal_mode(mode_str)) {
         // modo octal eh facil pq sobrescreve o modo entao eh so parsear
@@ -171,8 +180,7 @@ int apply_chmod(const char *mode_str, const char *filepath) {
     if (chmod(filepath, final_mode) == -1) {
         if (!silent_errors) {
             //acho que tem que ajustar depois essa mensagem para os casos possíveis de erro
-            fprintf(stderr, "ERRO: nao foi possivel mudar as perms de '%s': %s\n", 
-                    filepath, strerror(errno));
+            fprintf(stderr, "chmod: changing permissions of '%s': %s\n", filepath, strerror(errno));
         }
         return -1;
     }
