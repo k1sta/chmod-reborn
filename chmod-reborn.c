@@ -33,6 +33,37 @@ int preserve_root = 0;
 //flags globais do --reference, que copia o modo de outro arquivo em vez de usar o MODE
 int use_reference = 0;
 mode_t reference_mode = 0;
+//umask do processo, usada quando o modo simbolico nao diz a classe (ex: +x em vez de a+x)
+mode_t umask_value = 0;
+/*
+ligado quando o modo veio na forma de opcao (chmod -x arq), que eh onde a umask pode
+surpreender - nesse caso o chmod confere o resultado e avisa
+*/
+int diagnose_surprises = 0;
+
+/*
+mascaras das classes, do mesmo jeito que o GNU separa:
+o u fica com o setuid, o g com o setgid e o o com o sticky
+*/
+#define MASK_U (S_ISUID | S_IRWXU)
+#define MASK_G (S_ISGID | S_IRWXG)
+#define MASK_O (S_ISVTX | S_IRWXO)
+#define MASK_ALL 07777
+
+//os bits de uma permissao nas tres classes de uma vez
+#define BITS_R (S_IRUSR | S_IRGRP | S_IROTH)
+#define BITS_W (S_IWUSR | S_IWGRP | S_IWOTH)
+#define BITS_X (S_IXUSR | S_IXGRP | S_IXOTH)
+
+/*
+le a umask do processo
+nao existe syscall so pra consultar, entao zera, guarda o valor antigo e devolve ele pro lugar
+*/
+mode_t get_umask(void) {
+    mode_t value = umask(0);
+    umask(value);
+    return value;
+}
 
 void invalid_mode(const char *mode_str) {
     fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
@@ -163,9 +194,128 @@ int is_symbolic_mode(const char *mode_str) {
 
 /*
 parser simbolcio
-nao implementado
+calcula o modo novo aplicando uma clausula de cada vez (MODE[,MODE]...) por cima do modo atual
+o is_dir importa pro X e pra regra de nao mexer em setuid/setgid de diretorio
+a umask vem por parametro pq o chamador precisa calcular tambem como seria sem ela
+assume que o mode_str ja foi aprovado pelo is_symbolic_mode
 */
-mode_t parse_symbolic(const char *mode_str, mode_t current_mode);
+mode_t parse_symbolic(const char *mode_str, mode_t current_mode, int is_dir, mode_t umask_bits) {
+    mode_t new_mode = current_mode & MASK_ALL;
+    int i = 0;
+
+    while (mode_str[i] != '\0') {
+        //classes atingidas pela clausula, 0 quando nao foram escritas (ai vale a umask)
+        mode_t affected = 0;
+
+        while (is_ugoa(mode_str[i])) {
+            if (mode_str[i] == 'u') affected |= MASK_U;
+            if (mode_str[i] == 'g') affected |= MASK_G;
+            if (mode_str[i] == 'o') affected |= MASK_O;
+            if (mode_str[i] == 'a') affected |= MASK_ALL;
+            i++;
+        }
+
+        //a mesma clausula pode ter varias operacoes, tipo u+x+w ou ug+-x
+        while (is_operator(mode_str[i])) {
+            char op = mode_str[i];
+            mode_t value = 0;
+            mode_t target = affected;
+            mode_t mentioned;
+            mode_t omit_change;
+            mode_t preserved;
+            int copy_existing = 0;
+            int x_if_any_x = 0;
+            int numeric = 0;
+
+            i++;
+
+            if (mode_str[i] >= '0' && mode_str[i] <= '7') {
+                //forma numerica [-+=][0-7]+, que atinge todos os bits e nao passa pela umask
+                numeric = 1;
+
+                while (mode_str[i] >= '0' && mode_str[i] <= '7') {
+                    value = (value << 3) | (mode_t)(mode_str[i] - '0');
+                    i++;
+                }
+                target = MASK_ALL;
+            } else if (mode_str[i] == 'u' || mode_str[i] == 'g' || mode_str[i] == 'o') {
+                //copia as permissoes de outra classe, tipo g=u
+                copy_existing = 1;
+
+                if (mode_str[i] == 'u') value = S_IRWXU;
+                if (mode_str[i] == 'g') value = S_IRWXG;
+                if (mode_str[i] == 'o') value = S_IRWXO;
+                i++;
+            } else {
+                //r, w, x, X, s e t
+                while (is_permission(mode_str[i])) {
+                    if (mode_str[i] == 'r') value |= BITS_R;
+                    if (mode_str[i] == 'w') value |= BITS_W;
+                    if (mode_str[i] == 'x') value |= BITS_X;
+                    if (mode_str[i] == 'X') x_if_any_x = 1;
+                    if (mode_str[i] == 's') value |= S_ISUID | S_ISGID;
+                    if (mode_str[i] == 't') value |= S_ISVTX;
+                    i++;
+                }
+            }
+
+            /*
+            o que a clausula pediu na mao, calculado antes de resolver o X e a copia
+            a forma numerica conta como se tivesse pedido todos os bits, por isso ela
+            zera o setuid/setgid de diretorio igual o octal puro faz
+            */
+            if (numeric) {
+                mentioned = MASK_ALL;
+            } else {
+                mentioned = target ? (target & value) : value;
+            }
+
+            //em diretorio o setuid/setgid so muda se foi pedido explicitamente
+            omit_change = (is_dir ? (mode_t)(S_ISUID | S_ISGID) : 0) & ~mentioned;
+
+            if (copy_existing) {
+                //isola os bits que a classe de origem tem e espalha pras tres classes
+                value &= new_mode;
+
+                if (value & BITS_R) value |= BITS_R;
+                if (value & BITS_W) value |= BITS_W;
+                if (value & BITS_X) value |= BITS_X;
+            }
+
+            if (x_if_any_x) {
+                //o X so liga o execute se ja tem algum execute ligado ou se eh diretorio
+                if (is_dir || (new_mode & BITS_X)) {
+                    value |= BITS_X;
+                }
+            }
+
+            //sem classe explicita eh a umask que decide o que pode ser mexido
+            if (target == 0) {
+                target = ~umask_bits;
+            }
+            value &= target;
+
+            if (op == '=') {
+                //com classe explicita preserva o que ficou de fora, sem classe limpa tudo
+                preserved = ((affected == 0 && !numeric) ? 0 : ~target) | omit_change;
+                new_mode = (new_mode & preserved) | value;
+            } else if (op == '+') {
+                new_mode |= value;
+            } else {
+                new_mode &= ~value;
+            }
+
+            new_mode &= MASK_ALL;
+        }
+
+        //pula a virgula e vai pra proxima clausula
+        if (mode_str[i] == ',') {
+            i++;
+        }
+    }
+
+    return new_mode;
+}
 
 
 /*preenche o texto com as permissões para o verbose */
@@ -206,11 +356,14 @@ chama o parser corresp
 aplica o chmod no arquivo usando syscall POSIX
 */
 int apply_chmod(const char *mode_str, const char *filepath) {
-    //inicializado com o modo atual pra nao mandar lixo pro chmod enquanto o simbolico nao existe
     mode_t final_mode = 0;
     mode_t old_mode;
+    //modo que sairia se a umask nao entrasse na conta, so pro aviso de ambiguidade
+    mode_t naive_mode = 0;
+    int umask_ambiguous = 0;
     char old_text[10];
     char new_text[10];
+    char naive_text[10];
     struct stat file_status;
 
     if (stat(filepath, &file_status) == -1) {
@@ -235,8 +388,22 @@ int apply_chmod(const char *mode_str, const char *filepath) {
     } else {
         /* 
         parsing simbolico precisa do modo atual do arq para calcular o novo pro chmod
-        ainda nao implementei
         */
+        int is_dir = S_ISDIR(file_status.st_mode) ? 1 : 0;
+
+        final_mode = parse_symbolic(mode_str, old_mode, is_dir, umask_value);
+
+        /*
+        modo escrito na forma de opcao (-x, -r, ...) nao diz a classe, entao quem decide
+        o alcance eh a umask e o resultado pode nao ser o que o comando parece pedir
+        o chmod aplica do mesmo jeito, mas avisa e termina com falha
+        */
+        if (diagnose_surprises) {
+            naive_mode = parse_symbolic(mode_str, old_mode, is_dir, 0);
+
+            //so reclama se a umask deixou o modo MAIS permissivo do que o comando sugere
+            umask_ambiguous = (final_mode & ~naive_mode) != 0;
+        }
     }
 
     // chama syscall POSIX para mudar permissoes (nao sei se isso eh roubar k)
@@ -257,6 +424,15 @@ int apply_chmod(const char *mode_str, const char *filepath) {
         } else {
             printf("mode of '%s' changed from %04o (%s) to %04o (%s)\n", filepath, (unsigned int)old_mode, old_text, (unsigned int)final_mode, new_text);}
         }
+
+    //o aviso sai depois da linha do verbose e nao eh silenciado pelo -f
+    if (umask_ambiguous) {
+        mode_verbose(final_mode, new_text);
+        mode_verbose(naive_mode, naive_text);
+        fprintf(stderr, "chmod: %s: new permissions are %s, not %s\n", filepath, new_text, naive_text);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -507,6 +683,10 @@ int main(int argc, char *argv[]) {
     int exit = EXIT_SUCCESS;
     int argument_index = 1;
     int first_file;
+    int end_of_options = 0;
+
+    //a umask eh necessaria pro modo simbolico sem classe, tipo +x
+    umask_value = get_umask();
     
     //verifica argumentos de entrada - é obrigatório informar o modo e pelo menos um arquivo
     //trata os erros de forma similar ao chmod
@@ -624,6 +804,22 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        /*
+        o getopt_long do GNU reserva o '--' pra opcao longa, entao '--' sozinho encerra
+        as opcoes e qualquer outro '--algo' que chegou aqui eh opcao invalida, nao modo
+        (por isso 'chmod --t-r arq' eh erro mesmo sendo um modo simbolico valido)
+        */
+        if (argv[argument_index][0] == '-' && argv[argument_index][1] == '-') {
+            if (argv[argument_index][2] == '\0') {
+                argument_index++;
+                end_of_options = 1;
+                break;
+            }
+
+            fprintf(stderr, "chmod: unrecognized option '%s'\nTry 'chmod --help' for more information.\n", argv[argument_index]);
+            return EXIT_FAILURE;
+        }
+
         //se não for uma flag, então é o modo e sai do loop
         break;
     }
@@ -640,6 +836,9 @@ int main(int argc, char *argv[]) {
     } else {
         mode_str = argv[argument_index];
         first_file = argument_index + 1;
+
+        //modo na forma de opcao (-x, -r, ...) e nao depois do '--' eh o caso de avisar
+        diagnose_surprises = (mode_str[0] == '-' && !end_of_options);
 
         //verifica se tem pelo menos um arquivo depois do modo
         if (first_file >= argc) {
