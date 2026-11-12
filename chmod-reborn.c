@@ -318,6 +318,23 @@ int is_changes_option(const char *argument) {
     return strcmp(argument, "-c") == 0 || strcmp(argument, "--changes") == 0;
 }
 
+//permitir comandos agrupados, como -fc
+int is_option_group(const char *argument) {
+    int i;
+    //tem que começar com - e não pode começar com --
+    if (argument[0] != '-' || argument[1] == '-' || argument[1] == '\0') {
+        return 0;
+    }
+
+    //todas as letras depois do - devem ser opções curtas
+    for (i = 1; argument[i] != '\0'; i++) {
+        if (argument[i] != 'f' && argument[i] != 'v' && argument[i] != 'c') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
     const char *mode_str;
     int exit = EXIT_SUCCESS;
@@ -340,6 +357,28 @@ int main(int argc, char *argv[]) {
         if (argc >= 2 && is_version_option(argv[argument_index])) {
             flag_version();
             return EXIT_SUCCESS;
+        }
+
+        if (is_option_group(argv[argument_index])) {
+            int i;
+
+            for (i = 1; argv[argument_index][i] != '\0'; i++) {
+                char option = argv[argument_index][i];
+
+                if (option == 'f') {
+                    silent_errors = 1;
+                }
+                if (option == 'v') {
+                    verbose = 1;
+                    changes_only = 0;
+                }
+                if (option == 'c') {
+                    changes_only = 1;
+                    verbose = 0;
+                }
+            }
+            argument_index++;
+            continue;
         }
 
         if (is_verbose_option(argv[argument_index])) {
@@ -383,13 +422,6 @@ int main(int argc, char *argv[]) {
     if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
         invalid_mode(mode_str);
     }
-
-    /* diretório ou arquivo informados não foram encontrados
-    if()
-        fprintf(stderr, "chmod: cannot access '%s': No such file or directory\n", argv[2]);
-        return EXIT_FAILURE;
-    } */
-
     
     
     // // confere se tem o minimo de argumentos
