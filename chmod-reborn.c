@@ -423,12 +423,6 @@ int main(int argc, char *argv[]) {
         invalid_mode(mode_str);
     }
     
-    
-    // // confere se tem o minimo de argumentos
-    // if (argc < 3) {
-    //     fprintf(stderr, "Uso: %s <modo> <arq1> [arq2 ...]\n", argv[0]); //[arq2 ...] nao implementado ainda
-    //     return EXIT_FAILURE;
-    // }
 
     /*
     colocar aqui parsing de flag depois
@@ -440,11 +434,6 @@ int main(int argc, char *argv[]) {
     -h, --help: mostra a ajuda
     */
 
-    
-
-    /*
-    ainda nao ta implementado 2+ arquivos, implementar um loop para percorrer do argv2 ate argv argc-1 - OK
-    */
    for (int i = argument_index + 1; i <= argc - 1; i++) {
         if (apply_chmod(mode_str, argv[i]) != 0) {
         exit = EXIT_FAILURE;
