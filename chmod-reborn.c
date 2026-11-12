@@ -12,6 +12,13 @@ deixar sem nome para nao vazar na internet
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <dirent.h>
+#include <limits.h>
+
+//alguns sistemas nao definem o PATH_MAX no limits.h
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 //flag global para erros silenciosos 
 int silent_errors = 0;
@@ -19,6 +26,13 @@ int silent_errors = 0;
 int verbose = 0;
 //flag global para mostrar apenas mudanças
 int changes_only = 0;
+//flag global para aplicar o modo recursivamente
+int recursive = 0;
+//flag global para proteger a raiz '/' na recursao (o padrao do chmod eh nao proteger)
+int preserve_root = 0;
+//flags globais do --reference, que copia o modo de outro arquivo em vez de usar o MODE
+int use_reference = 0;
+mode_t reference_mode = 0;
 
 void invalid_mode(const char *mode_str) {
     fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
@@ -192,7 +206,8 @@ chama o parser corresp
 aplica o chmod no arquivo usando syscall POSIX
 */
 int apply_chmod(const char *mode_str, const char *filepath) {
-    mode_t final_mode;
+    //inicializado com o modo atual pra nao mandar lixo pro chmod enquanto o simbolico nao existe
+    mode_t final_mode = 0;
     mode_t old_mode;
     char old_text[10];
     char new_text[10];
@@ -209,8 +224,12 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 
 
     old_mode = file_status.st_mode & 07777;
+    final_mode = old_mode;
 
-    if (is_octal_mode(mode_str)) {
+    if (use_reference) {
+        // com --reference nem precisa parsear nada, o modo ja veio pronto do RFILE
+        final_mode = reference_mode;
+    } else if (is_octal_mode(mode_str)) {
         // modo octal eh facil pq sobrescreve o modo entao eh so parsear
         final_mode = parse_octal(mode_str);
     } else {
@@ -242,8 +261,89 @@ int apply_chmod(const char *mode_str, const char *filepath) {
 }
 
 /*
+aplica o chmod no caminho e, se for diretorio, desce no conteudo dele
+o GNU vai de cima pra baixo (primeiro o diretorio, depois o que tem dentro)
+*/
+int apply_chmod_recursive(const char *mode_str, const char *path) {
+    struct stat path_status;
+    struct stat child_status;
+    DIR *directory;
+    struct dirent *entry;
+    char child_path[PATH_MAX];
+    int result;
+
+    result = apply_chmod(mode_str, path);
+
+    /*
+    lstat em vez de stat pq link simbolico pra diretorio nao deve ser percorrido
+    se nem deu pra ler ou nao eh diretorio, acabou o trabalho aqui
+    */
+    if (lstat(path, &path_status) == -1 || !S_ISDIR(path_status.st_mode)) {
+        return result;
+    }
+
+    directory = opendir(path);
+    if (directory == NULL) {
+        if (!silent_errors) {
+            fprintf(stderr, "chmod: cannot read directory '%s': %s\n", path, strerror(errno));
+        }
+        return -1;
+    }
+
+    while ((entry = readdir(directory)) != NULL) {
+        //pula o proprio diretorio e o pai, senao a recursao nunca termina
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        //monta o caminho do filho e confere se caberia no buffer
+        if (snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name) >= (int)sizeof(child_path)) {
+            if (!silent_errors) {
+                fprintf(stderr, "chmod: cannot access '%s/%s': %s\n", path, entry->d_name, strerror(ENAMETOOLONG));
+            }
+            result = -1;
+            continue;
+        }
+
+        //o chmod nunca mexe na permissao de link simbolico que ele achou na recursao
+        if (lstat(child_path, &child_status) == 0 && S_ISLNK(child_status.st_mode)) {
+            continue;
+        }
+
+        if (apply_chmod_recursive(mode_str, child_path) != 0) {
+            result = -1;
+        }
+    }
+
+    closedir(directory);
+    return result;
+}
+
+/*
 Flags
 */
+
+/*
+checa se o argumento eh uma abreviacao valida de uma opcao longa
+(o GNU aceita prefixo desde que nao fique ambiguo, tipo --rec para --recursive)
+min_len eh o menor prefixo aceito, sem contar o '--'
+*/
+int is_long_option(const char *argument, const char *option, int min_len) {
+    size_t len;
+
+    if (argument[0] != '-' || argument[1] != '-') {
+        return 0;
+    }
+
+    argument += 2;
+    len = strlen(argument);
+
+    if (len < (size_t)min_len || len > strlen(option)) {
+        return 0;
+    }
+
+    return strncmp(argument, option, len) == 0;
+}
 
 int is_ambiguous_verbose_version_option(const char *argument) {
     return strcmp(argument, "--v") == 0 || strcmp(argument, "--ve") == 0 || strcmp(argument, "--ver") == 0;
@@ -318,6 +418,72 @@ int is_changes_option(const char *argument) {
     return strcmp(argument, "-c") == 0 || strcmp(argument, "--changes") == 0;
 }
 
+/* Flag recursive */
+/* --r e --re sao ambiguos entre --recursive e --reference */
+int is_ambiguous_recursive_reference_option(const char *argument) {
+    return strcmp(argument, "--r") == 0 || strcmp(argument, "--re") == 0;
+}
+
+int is_recursive_option(const char *argument) {
+    return strcmp(argument, "-R") == 0 || is_long_option(argument, "recursive", 3);
+}
+
+/* Flag reference */
+/*
+devolve o RFILE de um --reference=RFILE (vale pras abreviacoes --ref=, --refe=, ...)
+ou NULL se o argumento nao for essa opcao
+*/
+const char *reference_option_value(const char *argument) {
+    const char *equals = strchr(argument, '=');
+    char name[32];
+    size_t len;
+
+    if (equals == NULL) {
+        return NULL;
+    }
+
+    len = (size_t)(equals - argument);
+    if (len >= sizeof(name)) {
+        return NULL;
+    }
+
+    memcpy(name, argument, len);
+    name[len] = '\0';
+
+    if (!is_long_option(name, "reference", 3)) {
+        return NULL;
+    }
+
+    return equals + 1;
+}
+
+/* Flags preserve-root e no-preserve-root */
+int is_preserve_root_option(const char *argument) {
+    return is_long_option(argument, "preserve-root", 1);
+}
+
+int is_no_preserve_root_option(const char *argument) {
+    return is_long_option(argument, "no-preserve-root", 1);
+}
+
+/*
+checa se o caminho eh a raiz do sistema ('/', '//', ...) para o failsafe do --preserve-root
+*/
+int is_root_path(const char *path) {
+    int i;
+
+    if (path[0] != '/') {
+        return 0;
+    }
+
+    for (i = 1; path[i] != '\0'; i++) {
+        if (path[i] != '/') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 //permitir comandos agrupados, como -fc
 int is_option_group(const char *argument) {
     int i;
@@ -328,7 +494,7 @@ int is_option_group(const char *argument) {
 
     //todas as letras depois do - devem ser opções curtas
     for (i = 1; argument[i] != '\0'; i++) {
-        if (argument[i] != 'f' && argument[i] != 'v' && argument[i] != 'c') {
+        if (argument[i] != 'f' && argument[i] != 'v' && argument[i] != 'c' && argument[i] != 'R') {
             return 0;
         }
     }
@@ -336,9 +502,11 @@ int is_option_group(const char *argument) {
 }
 
 int main(int argc, char *argv[]) {
-    const char *mode_str;
+    const char *mode_str = NULL;
+    const char *reference_value;
     int exit = EXIT_SUCCESS;
     int argument_index = 1;
+    int first_file;
     
     //verifica argumentos de entrada - é obrigatório informar o modo e pelo menos um arquivo
     //trata os erros de forma similar ao chmod
@@ -359,6 +527,11 @@ int main(int argc, char *argv[]) {
             return EXIT_SUCCESS;
         }
 
+        if (is_ambiguous_recursive_reference_option(argv[argument_index])) {
+            fprintf(stderr,"chmod: option '%s' is ambiguous; possibilities: \n'--recursive' '--reference'\nTry 'chmod --help' for more information.\n", argv[argument_index]);
+            return EXIT_FAILURE;
+        }
+
         if (is_option_group(argv[argument_index])) {
             int i;
 
@@ -375,6 +548,9 @@ int main(int argc, char *argv[]) {
                 if (option == 'c') {
                     changes_only = 1;
                     verbose = 0;
+                }
+                if (option == 'R') {
+                    recursive = 1;
                 }
             }
             argument_index++;
@@ -401,6 +577,53 @@ int main(int argc, char *argv[]) {
             argument_index++;
             continue;
         }
+
+        if (is_recursive_option(argv[argument_index])) {
+            recursive = 1;
+            argument_index++;
+            continue;
+        }
+
+        if (is_preserve_root_option(argv[argument_index])) {
+            preserve_root = 1;
+            argument_index++;
+            continue;
+        }
+
+        if (is_no_preserve_root_option(argv[argument_index])) {
+            preserve_root = 0;
+            argument_index++;
+            continue;
+        }
+
+        //--reference=RFILE: o modo vem das permissoes do RFILE
+        reference_value = reference_option_value(argv[argument_index]);
+
+        //--reference RFILE: o RFILE vem separado, no argumento seguinte
+        if (reference_value == NULL && is_long_option(argv[argument_index], "reference", 3)) {
+            if (argument_index + 1 >= argc) {
+                fprintf(stderr, "chmod: option '--reference' requires an argument\nTry 'chmod --help' for more information.\n");
+                return EXIT_FAILURE;
+            }
+            argument_index++;
+            reference_value = argv[argument_index];
+        }
+
+        if (reference_value != NULL) {
+            struct stat reference_status;
+
+            //o RFILE eh sempre dereferenciado se for link simbolico, por isso stat e nao lstat
+            if (stat(reference_value, &reference_status) == -1) {
+                fprintf(stderr, "chmod: failed to get attributes of '%s': %s\n", reference_value, strerror(errno));
+                return EXIT_FAILURE;
+            }
+
+            use_reference = 1;
+            reference_mode = reference_status.st_mode & 07777;
+            argument_index++;
+            continue;
+        }
+
         //se não for uma flag, então é o modo e sai do loop
         break;
     }
@@ -411,31 +634,49 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     
-    mode_str = argv[argument_index];
+    if (use_reference) {
+        //com --reference não existe operando de modo, o primeiro operando já é arquivo
+        first_file = argument_index;
+    } else {
+        mode_str = argv[argument_index];
+        first_file = argument_index + 1;
 
-    //verifica se tem pelo menos um arquivo depois do modo
-    if (argument_index + 1 >= argc) {
-        fprintf(stderr,"chmod: missing operand after '%s'\nTry 'chmod --help' for more information.\n",mode_str);
-        return EXIT_FAILURE;
-    }
-    //chmod modo inválido
-    if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
-        invalid_mode(mode_str);
+        //verifica se tem pelo menos um arquivo depois do modo
+        if (first_file >= argc) {
+            fprintf(stderr,"chmod: missing operand after '%s'\nTry 'chmod --help' for more information.\n",mode_str);
+            return EXIT_FAILURE;
+        }
+        //chmod modo inválido
+        if(!is_symbolic_mode(mode_str) && !is_octal_mode(mode_str)){
+            invalid_mode(mode_str);
+        }
     }
     
 
     /*
-    colocar aqui parsing de flag depois
-    as flags podem ser (sao 4 vou ver se invento uma nova pra ficar com 5 e ganhar o bonus):
+    flags implementadas (parseadas no while lá em cima):
     -v, --verbose: printa o que ta sendo feito
     -R, --recursive: aplica o modo recursivamente a todos os arquivos e diretórios
     -c, --changes: mostra as mudanças que estão sendo feitas
-    -f, --force: ignora erros e continua executando
+    -f, --silent, --quiet: ignora erros e continua executando
+    --reference=RFILE: copia o modo do RFILE em vez de usar o MODE
+    --preserve-root / --no-preserve-root: failsafe da raiz na recursao
     -h, --help: mostra a ajuda
     */
 
-   for (int i = argument_index + 1; i <= argc - 1; i++) {
-        if (apply_chmod(mode_str, argv[i]) != 0) {
+   for (int i = first_file; i <= argc - 1; i++) {
+        //failsafe: com -R e --preserve-root a raiz nao pode ser alterada
+        if (recursive && preserve_root && is_root_path(argv[i])) {
+            fprintf(stderr, "chmod: it is dangerous to operate recursively on '%s'\nchmod: use --no-preserve-root to override this failsafe\n", argv[i]);
+            exit = EXIT_FAILURE;
+            continue;
+        }
+
+        if (recursive) {
+            if (apply_chmod_recursive(mode_str, argv[i]) != 0) {
+                exit = EXIT_FAILURE;
+            }
+        } else if (apply_chmod(mode_str, argv[i]) != 0) {
         exit = EXIT_FAILURE;
     }
    }
