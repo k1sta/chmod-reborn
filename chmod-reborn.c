@@ -15,7 +15,10 @@ deixar sem nome para nao vazar na internet
 
 //flag global para erros silenciosos 
 int silent_errors = 0;
+//falg global para verbose
 int verbose = 0;
+//flag global para mostrar apenas mudanças
+int changes_only = 0;
 
 void invalid_mode(const char *mode_str) {
     fprintf(stderr, "chmod: invalid mode: '%s'\nTry 'chmod --help' for more information.\n", mode_str);
@@ -166,6 +169,21 @@ void mode_verbose(mode_t mode, char text[10]) {
     text[7] = (mode & S_IWOTH) ? 'w' : '-';
     text[8] = (mode & S_IXOTH) ? 'x' : '-';
 
+    //Se o bit setuid estiver ativo, ele vai pra posição de execuçãodo dono
+    if (mode & S_ISUID) {
+        text[2] = (mode & S_IXUSR) ? 's' : 'S';
+    }
+
+    //setgid na posição de execução do grupo
+    if (mode & S_ISGID) {
+        text[5] = (mode & S_IXGRP) ? 's' : 'S';
+    }
+
+    //sticky bit na posição de execução de outros
+    if (mode & S_ISVTX) {
+        text[8] = (mode & S_IXOTH) ? 't' : 'T';
+    }
+
     text[9] = '\0'; }
 
 /*
@@ -211,7 +229,7 @@ int apply_chmod(const char *mode_str, const char *filepath) {
         return -1;
     }
 
-    if (verbose) {
+    if (verbose || (changes_only && old_mode != final_mode)) {
         mode_verbose(old_mode, old_text);
         mode_verbose(final_mode, new_text);
 
@@ -295,6 +313,11 @@ int is_verbose_option(const char *argument) {
     return strcmp(argument, "-v") == 0 ||  strcmp(argument, "--verb") == 0 || strcmp(argument, "--verbo") == 0 || strcmp(argument, "--verbose") == 0;
 }
 
+/* Flag changes*/
+int is_changes_option(const char *argument) {
+    return strcmp(argument, "-c") == 0 || strcmp(argument, "--changes") == 0;
+}
+
 int main(int argc, char *argv[]) {
     const char *mode_str;
     int exit = EXIT_SUCCESS;
@@ -321,6 +344,14 @@ int main(int argc, char *argv[]) {
 
         if (is_verbose_option(argv[argument_index])) {
             verbose = 1;
+            changes_only = 0;
+            argument_index++;
+            continue;
+        }
+
+        if (is_changes_option(argv[argument_index])) {
+            changes_only = 1;
+            verbose = 0;
             argument_index++;
             continue;
         }
